@@ -1,0 +1,64 @@
+import numpy as np
+import pandas as pd
+from scipy.stats import poisson
+
+def generate_em_microstructure_data(n_assets=10, n_days=30, minutes_per_day=390, seed=42):
+    """
+    Generates synthetic high-frequency data mimicking Emerging Market microstructure.
+    Features: Stale prices (zero volume), discrete tick rounding, stochastic volatility.
+    """
+    np.random.seed(seed)
+    total_minutes = n_days * minutes_per_day
+    dates = pd.date_range(start="2023-01-01 09:00:00", periods=total_minutes, freq="1T")
+    
+    data = []
+    
+    for asset in range(n_assets):
+        # Base asset parameters
+        base_price = np.random.uniform(500, 5000)
+        volatility = np.random.uniform(0.0005, 0.002) 
+        lambda_trade = np.random.uniform(0.2, 0.8) 
+        
+        # Simulate geometric brownian motion for true underlying price
+        returns = np.random.normal(0, volatility, total_minutes)
+        true_prices = base_price * np.exp(np.cumsum(returns))
+        
+        # Simulate EM frictions
+        for t in range(total_minutes):
+            # 1. Trade Arrival (Poisson process to create stale prices)
+            num_trades = poisson.rvs(lambda_trade)
+            
+            if num_trades == 0:
+                volume = 0
+                # Stale price: carries over from previous minute
+                observed_price = data[-1]['Close'] if t > 0 else base_price 
+                high, low, open_p = observed_price, observed_price, observed_price
+            else:
+                volume = num_trades * np.random.exponential(100) # Volume clustering
+                
+                # 2. Discrete Tick Sizes (Mimicking IDX tick rules)
+                # e.g., prices > 500 have tick size of 5 IDR
+                tick_size = 5 if true_prices[t] > 500 else 2 
+                
+                # Add microstructure noise (bid-ask bounce)
+                noise = np.random.choice([-tick_size, tick_size])
+                observed_price = np.round(true_prices[t] / tick_size) * tick_size + noise
+                
+                # Simulate OHLC for the minute
+                open_p = observed_price - np.random.choice([0, tick_size])
+                high = observed_price + np.random.choice([0, tick_size, tick_size*2])
+                low = observed_price - np.random.choice([0, tick_size, tick_size*2])
+                
+            data.append({
+                'Datetime': dates[t],
+                'Asset': f"Equity_{asset}",
+                'Open': open_p,
+                'High': high,
+                'Low': low,
+                'Close': observed_price,
+                'Volume': volume
+            })
+            
+    df = pd.DataFrame(data)
+    df.set_index('Datetime', inplace=True)
+    return df
